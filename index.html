@@ -9,6 +9,28 @@
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
         body { font-family: 'Inter', sans-serif; }
     </style>
+
+    <!-- Firebase (deve vir antes do seu script principal) -->
+    <!-- Firebase App (base) -->
+    <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+    <!-- Firebase Firestore -->
+    <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+
+    <script>
+      // Configuração do Firebase
+      const firebaseConfig = {
+        apiKey: "AIzaSyD3ScwfW4Ld2WV6QCntph6HdvhT3xztZzU",
+        authDomain: "barbearia-a66e9.firebaseapp.com",
+        projectId: "barbearia-a66e9",
+        storageBucket: "barbearia-a66e9.firebasestorage.app",
+        messagingSenderId: "30136159716",
+        appId: "1:30136159716:web:05770f391df96196464bf1"
+      };
+
+      // Inicializar Firebase
+      firebase.initializeApp(firebaseConfig);
+      const db = firebase.firestore();
+    </script>
 </head>
 <body class="bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 min-h-screen">
     <div class="container mx-auto px-4 py-8">
@@ -256,13 +278,32 @@
     </div>
 
     <script>
-        // Data storage
-        let clients = JSON.parse(localStorage.getItem('barberClients') || '[]');
+        // Data storage (clientes agora vêm do Firestore)
+        let clients = [];
         let packages = JSON.parse(localStorage.getItem('servicePackages') || '{"cabelo-barba": {"name": "Pacote Cabelo + Barba", "description": "4 cortes completos por mês", "price": 200, "icon": "✂️💈"}, "cabelo": {"name": "Pacote Só Cabelo", "description": "4 cortes de cabelo por mês", "price": 120, "icon": "✂️"}, "barba": {"name": "Pacote Só Barba", "description": "4 barbas por mês", "price": 100, "icon": "💈"}}');
         let barberNames = JSON.parse(localStorage.getItem('barberNames') || '{"barbeiro1": "Barbeiro 1", "barbeiro2": "Barbeiro 2", "barbeiro3": "Barbeiro 3", "barbeiro4": "Barbeiro 4", "barbeiro5": "Barbeiro 5"}');
         let editingPackage = null;
         let currentBarber = 'barbeiro1';
         let showingAllBarbers = false;
+
+        // ---- Firestore: carregar clientes do banco ----
+function loadClients() {
+  db.collection("clients")
+    .orderBy("date", "desc")
+    .onSnapshot(snapshot => {
+      clients = [];
+      snapshot.forEach(doc => {
+        const data = doc.data();
+        const price = typeof data.price === "number" ? data.price : parseFloat(data.price) || 0;
+        clients.push({ id: doc.id, ...data, price });
+      });
+      updateStats();
+      renderClientsTable();
+    }, err => {
+      console.error("Erro ao carregar clientes:", err);
+    });
+}
+
 
         // Initialize
         document.addEventListener('DOMContentLoaded', function() {
@@ -287,10 +328,13 @@
                 renderClientsTable();
                 updateActiveBarberId();
             });
+
+            // Carregar clientes do Firestore ao abrir
+            loadClients();
         });
 
-        // Form submission
-        document.getElementById('clientForm').addEventListener('submit', function(e) {
+        // Form submission -> salvar no Firestore
+        document.getElementById('clientForm').addEventListener('submit', async function(e) {
             e.preventDefault();
             
             const barber = document.getElementById('clientBarber').value;
@@ -304,7 +348,6 @@
             const serviceName = packageData.name;
             
             const client = {
-                id: Date.now(),
                 barber,
                 name,
                 phone,
@@ -314,17 +357,23 @@
                 price: price
             };
             
-            clients.push(client);
-            localStorage.setItem('barberClients', JSON.stringify(clients));
+            try {
+              const docRef = await db.collection("clients").add(client);
+              // atualiza a lista local e a UI
+              clients.push({ id: docRef.id, ...client });
+              updateStats();
+              renderClientsTable();
+              console.log("Cliente adicionado com sucesso!");
+            } catch (error) {
+              console.error("Erro ao adicionar cliente: ", error);
+              alert("Não foi possível salvar no banco agora.");
+            }
             
             // Reset form
             this.reset();
             document.getElementById('serviceDate').valueAsDate = new Date();
-            
-            updateStats();
-            renderClientsTable();
-            
-            // Success feedback
+
+            // Feedback visual
             const button = document.querySelector('button[type="submit"]');
             const originalText = button.textContent;
             button.textContent = '✅ Cliente Adicionado!';
@@ -386,7 +435,8 @@
                         <td class="py-3 px-2 text-purple-200">${new Date(client.date).toLocaleDateString('pt-BR')}</td>
                         <td class="py-3 px-2 text-green-400 font-semibold">R$ ${client.price.toFixed(2).replace('.', ',')}</td>
                         <td class="py-3 px-2">
-                            <button onclick="deleteClient(${client.id})" 
+                            <!-- id do Firestore é string: passar entre aspas -->
+                            <button onclick="deleteClient('${client.id}')" 
                                     class="text-red-400 hover:text-red-300 text-sm">
                                 🗑️ Excluir
                             </button>
@@ -396,12 +446,18 @@
             }).join('');
         }
 
-        function deleteClient(id) {
+        // Exclusão no Firestore
+        async function deleteClient(id) {
             if (confirm('Tem certeza que deseja excluir este cliente?')) {
-                clients = clients.filter(client => client.id !== id);
-                localStorage.setItem('barberClients', JSON.stringify(clients));
-                updateStats();
-                renderClientsTable();
+                try {
+                    await db.collection("clients").doc(String(id)).delete();
+                    clients = clients.filter(client => client.id !== id);
+                    updateStats();
+                    renderClientsTable();
+                } catch (err) {
+                    console.error('Erro ao excluir:', err);
+                    alert('Não foi possível excluir agora.');
+                }
             }
         }
 
@@ -537,7 +593,7 @@
             if (confirm('⚠️ ATENÇÃO: Isso irá apagar TODOS os dados permanentemente. Tem certeza?')) {
                 if (confirm('Última confirmação: Todos os clientes e dados serão perdidos. Continuar?')) {
                     clients = [];
-                    localStorage.removeItem('barberClients');
+                    localStorage.removeItem('barberClients'); // continua apenas no local
                     updateStats();
                     renderClientsTable();
                     alert('✅ Todos os dados foram limpos!');
